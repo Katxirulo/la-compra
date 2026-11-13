@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>La compra</title>
+  <meta name="description" content="Lista de la compra compartida y sincronizada para toda la casa.">
+  <meta name="theme-color" content="#EEF3EC" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121A15" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main id="app">
+
+  <!-- Pantalla inicial: crear o unirse a una lista -->
+  <section id="setup" hidden>
+    <h1 class="brand">La compra</h1>
+    <p class="lead">Una lista compartida para toda la casa. Lo que apunta uno, lo ven todos al momento.</p>
+
+    <label class="field">
+      <span>Tu nombre</span>
+      <input id="displayName" maxlength="40" autocomplete="given-name" placeholder="Ej. David">
+    </label>
+
+    <div class="setup-grid">
+      <form id="joinForm" class="panel">
+        <h2>Unirme a una lista</h2>
+        <label class="field">
+          <span>Código de invitación</span>
+          <input id="joinCode" maxlength="6" autocapitalize="characters" autocomplete="off" placeholder="ABC123" required>
+        </label>
+        <button class="btn primary" type="submit">Unirme</button>
+      </form>
+
+      <form id="createForm" class="panel">
+        <h2>Crear una lista nueva</h2>
+        <label class="field">
+          <span>Nombre de la lista</span>
+          <input id="householdName" maxlength="60" placeholder="Casa" required>
+        </label>
+        <button class="btn" type="submit">Crear lista</button>
+      </form>
+    </div>
+    <p id="setupError" class="error" role="alert"></p>
+  </section>
+
+  <!-- Pantalla principal -->
+  <section id="main" hidden>
+    <header class="top">
+      <h1 id="hhName" class="brand"></h1>
+      <button id="inviteBtn" class="btn small" type="button">Invitar</button>
+    </header>
+
+    <form id="addForm" class="add">
+      <input id="itemName" maxlength="80" placeholder="Añade un producto" autocomplete="off" required aria-label="Producto">
+      <input id="itemQty" maxlength="20" placeholder="Cant." aria-label="Cantidad" class="qty" autocomplete="off">
+      <button class="btn primary" type="submit">Añadir</button>
+    </form>
+
+    <section class="favs" aria-labelledby="favTitle">
+      <div class="row-head">
+        <h2 id="favTitle">Habituales</h2>
+        <button id="editFavs" class="link" type="button">Editar</button>
+      </div>
+      <div id="favList" class="chips"></div>
+      <p id="favEmpty" class="hint">Lo que vayáis añadiendo aparecerá aquí para apuntarlo con un toque.</p>
+    </section>
+
+    <section aria-labelledby="pendingTitle">
+      <div class="row-head">
+        <h2 id="pendingTitle">Por comprar <span id="pendingCount" class="count"></span></h2>
+      </div>
+      <ul id="pendingList" class="list"></ul>
+      <p id="pendingEmpty" class="hint">No falta nada. Apunta lo que se vaya acabando.</p>
+    </section>
+
+    <section id="doneSection" aria-labelledby="doneTitle">
+      <div class="row-head">
+        <h2 id="doneTitle">En el carro <span id="doneCount" class="count"></span></h2>
+        <button id="clearDone" class="link" type="button">Quitar comprados</button>
+      </div>
+      <ul id="doneList" class="list done"></ul>
+    </section>
+
+    <footer class="foot">
+      <span id="syncState" class="sync">Conectando…</span>
+      <button id="leaveBtn" class="link" type="button">Cambiar de lista</button>
+    </footer>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
