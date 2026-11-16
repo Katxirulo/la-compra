@@ -298,7 +298,7 @@ body.ro .w{display:none !important}
     <p class="note" id="finFileName" style="margin:6px 0 0">Con la foto se leen el total y el precio de cada artículo, estuviera o no en la lista.</p>
   </div>
   <div class="inline" id="finOcrRow" hidden>
-    <button class="btn" type="button" id="finOcrBtn" data-act="ocr">Volver a leer el ticket</button>
+    <button class="btn" type="button" id="finOcrBtn" data-act="ocr">Leer el ticket</button>
   </div>
   <div class="ocr" id="finOcrMsg" hidden></div>
   <label class="f">Total pagado (€)<input type="text" inputmode="decimal" id="finTotal" placeholder="0,00"></label>
@@ -360,6 +360,7 @@ body.ro .w{display:none !important}
   <div class="actions"><button class="btn" type="button" data-close>Cerrar</button></div>
 </div></dialog>
 
+<script src="ticket.js?v=2"></script>
 <script>
 "use strict";
 const STORES=[{id:"mercadona",name:"Mercadona",short:"M"},{id:"dia",name:"DIA",short:"D"},{id:"lupa",name:"Lupa",short:"L"}];
@@ -396,7 +397,6 @@ function ask(msg,ok){return new Promise(res=>{$("askMsg").textContent=msg;$("ask
 
 /* ---------- Datos: un fichero JSON en un repositorio privado de GitHub ---------- */
 const GH={owner:"Katxirulo",repo:"la-compra-datos",file:"datos.json"};
-const AI_DEF={gemini:"gemini-2.5-flash",anthropic:"claude-haiku-4-5"};
 const LS={get(k){try{return JSON.parse(localStorage.getItem("compra."+k));}catch(e){return null;}},
   set(k,v){try{localStorage.setItem("compra."+k,JSON.stringify(v));}catch(e){}},del(k){try{localStorage.removeItem("compra."+k);}catch(e){}}};
 const COLS=["products","needs","purchases","manual"];
@@ -488,28 +488,6 @@ async function init(){
   window.addEventListener("online",()=>sync());
 }
 let raf=0;function schedule(){if(!raf)raf=requestAnimationFrame(()=>{raf=0;render();});}
-
-/* Lectura del ticket con la clave de API guardada en Ajustes */
-const aiCfg=()=>D.settings.v||{};
-const aiReady=()=>!!aiCfg().key;
-async function aiJson(prompt,blob){
-  const c=aiCfg(),prov=c.provider||"gemini",model=c.model||AI_DEF[prov],data=await blobB64(blob),mime=blob.type||"image/jpeg";
-  let r,text="";
-  try{
-    if(prov==="anthropic"){
-      r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":c.key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-        body:JSON.stringify({model,max_tokens:8000,messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:mime,data}},{type:"text",text:prompt}]}]})});
-      if(r.ok)text=((await r.json()).content||[]).filter(x=>x.type==="text").map(x=>x.text).join("");
-    }else{
-      r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{method:"POST",headers:{"content-type":"application/json","x-goog-api-key":c.key},
-        body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:mime,data}}]}],generationConfig:{responseMimeType:"application/json"}})});
-      if(r.ok)text=(((await r.json()).candidates||[])[0]?.content?.parts||[]).map(x=>x.text||"").join("");
-    }
-  }catch(e){throw {code:"net"};}
-  if(!r.ok)throw {code:r.status===401||r.status===403?"auth":r.status===404?"model":r.status===429?"limit":r.status===400?"bad":"net",status:r.status};
-  const a=text.indexOf("{"),b=text.lastIndexOf("}");
-  try{return JSON.parse(text.slice(a,b+1));}catch(e){throw {code:"parse"};}
-}
 
 /* ---------- Cálculos ---------- */
 function prodById(id){return S.products.find(p=>p.id===id);}
@@ -661,6 +639,7 @@ function renderGastos(){
   const list=[...ps].sort((a,b)=>String(b.date).localeCompare(String(a.date))||((b.at||0)-(a.at||0))).slice(0,60);
   $("gList").innerHTML=list.length?list.map(p=>`<div class="row"><span class="name">${eur(p.total)}<span class="sub">${dshort(p.date)} ${String(p.date).slice(0,4)} · ${(p.items||[]).length===1?"1 producto":(p.items||[]).length+" productos"}</span></span>${storeTag(p.store)}
     ${p.ticket?`<button class="ico" data-act="ticket" data-id="${p.id}" aria-label="Ver ticket">${ICO.img}</button>`:""}
+    <button class="ico w" data-act="pur-edit" data-id="${p.id}" aria-label="Editar compra">${ICO.edit}</button>
     <button class="ico w" data-act="pur-del" data-id="${p.id}" aria-label="Borrar compra">${ICO.del}</button></div>`).join(""):'<div class="empty">Sin compras para este filtro.</div>';
 }
 
@@ -713,25 +692,28 @@ function confirmPlan(){
 }
 
 /* Finalizar compra */
-function openFinish(fromTrip){
+function openFinish(fromTrip,pur){
   const t=fromTrip?S.trip:null;
-  fin={trip:!!t,blob:null,lines:t?(t.items||[]).filter(i=>i.done).map(i=>({name:i.name,pid:i.pid||"",qty:i.qty||1,price:""})):[]};
-  $("finTitle").textContent=t?"Finalizar compra":"Añadir gasto";
+  fin={trip:!!t,edit:pur?pur.id:null,ticket:pur?pur.ticket||null:null,newPhoto:false,blob:null,small:null,
+    lines:pur?(pur.items||[]).map(i=>({name:i.name,pid:i.pid||"",qty:i.qty||1,price:i.price?String(i.price).replace(".",","):""}))
+      :t?(t.items||[]).filter(i=>i.done).map(i=>({name:i.name,pid:i.pid||"",qty:i.qty||1,price:""})):[]};
+  $("finTitle").textContent=pur?"Editar compra":t?"Finalizar compra":"Añadir gasto";
   $("finStore").innerHTML=STORES.map(s=>`<option value="${s.id}">${s.name}</option>`).join("");
-  $("finStore").value=t?t.store:(ui.gf!=="all"?ui.gf:"mercadona");
-  $("finDate").value=today();$("finTotal").value="";$("finFile").value="";$("finCam").value="";
+  $("finStore").value=pur?pur.store:t?t.store:(ui.gf!=="all"?ui.gf:"mercadona");
+  $("finDate").value=pur?pur.date:today();$("finTotal").value=pur?String(pur.total).replace(".",","):"";$("finFile").value="";$("finCam").value="";
   $("finFileName").textContent="Con la foto se leen el total y el precio de cada artículo, estuviera o no en la lista.";
-  $("finOcrRow").hidden=true;$("finOcrMsg").hidden=true;$("finSave").disabled=false;
+  $("finOcrRow").hidden=!(fin.ticket&&aiReady());$("finOcrMsg").hidden=true;$("finSave").disabled=false;
+  if(fin.ticket)$("finFileName").textContent=aiReady()?"Esta compra tiene la foto del ticket guardada: puedes leerla ahora o cambiarla por otra.":"Esta compra tiene la foto del ticket guardada. Pon una clave de API en Ajustes para poder leer sus precios.";
   drawLines();$("dFin").showModal();
 }
 function syncLines(){if(!fin)return;
-  fin.lines=[...document.querySelectorAll("#finLines .line")].map(el=>({name:el.querySelector(".ln").value,pid:el.querySelector(".lp").value,qty:Math.max(1,num(el.querySelector(".lq").value)||1),price:el.querySelector(".lpr").value}));}
+  fin.lines=[...document.querySelectorAll("#finLines .line")].map(el=>({name:el.querySelector(".ln").value,pid:el.querySelector(".lp").value,qty:num(el.querySelector(".lq").value)>0?num(el.querySelector(".lq").value):1,price:el.querySelector(".lpr").value}));}
 function drawLines(){
   const opts=[...S.products].sort((a,b)=>a.name.localeCompare(b.name,"es"));
   $("finLines").innerHTML=fin.lines.length?fin.lines.map((l,i)=>`<div class="line">
     <input type="text" class="ln" id="ln${i}" value="${h(l.name)}" placeholder="Producto" aria-label="Nombre en el ticket">
     <select class="lp" id="lp${i}" aria-label="Producto de la lista maestra"><option value="">Producto nuevo</option>${opts.map(p=>`<option value="${p.id}" ${p.id===l.pid?"selected":""}>${h(p.name)}</option>`).join("")}</select>
-    <input type="text" inputmode="numeric" class="lq" id="lq${i}" value="${h(l.qty||1)}" aria-label="Unidades">
+    <input type="text" inputmode="decimal" class="lq" id="lq${i}" value="${h(String(l.qty||1).replace(".",","))}" aria-label="Unidades o kilos">
     <input type="text" inputmode="decimal" class="lpr" id="lpr${i}" value="${h(l.price)}" placeholder="€/ud" aria-label="Precio por unidad">
     <button class="ico" type="button" data-act="line-del" data-id="${i}" aria-label="Quitar línea">${ICO.del}</button></div>`).join("")
     :'<p class="note">Sin líneas. Puedes guardar solo el total.</p>';
@@ -743,35 +725,6 @@ async function shrink(file){ // reduce la foto antes de guardarla
     c.width=Math.round(bmp.width*k);c.height=Math.round(bmp.height*k);c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);
     return await new Promise(r=>c.toBlob(b=>r(b||file),"image/jpeg",.8));}catch(e){return file;}
 }
-async function readTicket(){
-  if(!fin?.blob||!aiReady())return;
-  syncLines();const btn=$("finOcrBtn"),msg=$("finOcrMsg");btn.disabled=true;msg.hidden=false;msg.textContent="Leyendo el ticket… suele tardar medio minuto.";
-  const catalog=S.products.map(p=>p.id+" | "+p.name).join("\n");
-  const prompt="La imagen es un ticket de compra de un supermercado español ("+SNAME[$("finStore").value]+"). Extrae sus datos.\n"+
-   "Responde SOLO con un objeto JSON con esta forma exacta:\n"+
-   '{"total": 23.45, "fecha": "2026-01-31", "lineas": [{"texto": "LECHE ENT. HAC 1L", "nombre": "Leche entera 1 L", "productId": "abc", "unidades": 2, "importe": 1.90}]}\n'+
-   "- total: importe total pagado, número con punto decimal.\n- fecha: fecha del ticket en formato AAAA-MM-DD, o null si no se lee.\n"+
-   "- lineas: una por cada artículo del ticket, sin omitir ninguno. texto: el nombre como aparece. nombre: el mismo artículo escrito de forma legible, sin abreviaturas, en minúsculas con mayúscula inicial. unidades: número de unidades (1 si no se indica o si va al peso). importe: lo cobrado en total por esa línea.\n"+
-   "- productId: el id del producto del catálogo que corresponde a esa línea, o null si ninguno encaja con claridad. No inventes ids.\n"+
-   "No incluyas descuentos globales, bolsas ni líneas de IVA como productos.\n\nCatálogo (id | nombre):\n"+(catalog||"(vacío)");
-  try{
-    fin.small=fin.small||await shrink(fin.blob);
-    const r=await aiJson(prompt,fin.small);
-    const ids=new Set(S.products.map(p=>p.id));
-    const lines=(Array.isArray(r?.lineas)?r.lineas:[]).map(l=>{const q=Math.max(1,Math.round(num(l.unidades))||1),imp=num(l.importe);
-      const pid=ids.has(l.productId)?l.productId:"";
-      return {name:String((pid?prodById(pid).name:l.nombre)||l.texto||"").slice(0,80),pid,qty:q,price:imp>0?(imp/q).toFixed(2).replace(".",","):""};}).filter(l=>l.name);
-    if(lines.length)fin.lines=lines;
-    if(num(r?.total)>0)$("finTotal").value=num(r.total).toFixed(2).replace(".",",");
-    if(/^\d{4}-\d{2}-\d{2}$/.test(r?.fecha||""))$("finDate").value=r.fecha;
-    drawLines();
-    const un=fin.lines.filter(l=>!l.pid).length;
-    msg.textContent=lines.length?"Leído: "+lines.length+(lines.length===1?" artículo":" artículos")+". Revisa el total y los precios."+(un?" "+un+(un===1?" no está":" no están")+" en la lista maestra: se "+(un===1?"añadirá":"añadirán")+" al guardar, o elige a qué producto "+(un===1?"corresponde":"corresponden")+".":""):"No he podido sacar las líneas. Escribe el total a mano.";
-  }catch(e){
-    const m={auth:"La clave de API no es válida. Revísala en Ajustes.",model:"El modelo indicado en Ajustes no existe. Cámbialo allí.",limit:"Se ha alcanzado el límite de uso de la clave de API. Prueba más tarde.",bad:"El servicio ha rechazado la petición. Revisa la clave y el modelo en Ajustes.",net:"No se pudo contactar con el servicio. Comprueba la conexión.",parse:"No he podido entender la respuesta. Inténtalo otra vez."};
-    msg.textContent=(m[e?.code]||"No se pudo leer el ticket.")+" También puedes escribir el total a mano.";console.warn(e);
-  }finally{btn.disabled=false;}
-}
 async function saveFinish(){
   syncLines();
   const items=fin.lines.filter(l=>l.name.trim()).map(l=>({name:l.name.trim(),pid:l.pid||null,qty:l.qty||1,price:num(l.price)||null}));
@@ -779,8 +732,8 @@ async function saveFinish(){
   if(!(total>0)){toast("Escribe el total pagado.");return;}
   const date=$("finDate").value||today(),store=$("finStore").value;
   $("finSave").disabled=true;
-  let ticket=null;
-  if(fin.blob){
+  let ticket=fin.ticket;
+  if(fin.blob&&(fin.newPhoto||!fin.ticket)){
     try{const path="tickets/"+rid()+".jpg";await putFile(path,fin.small||await shrink(fin.blob));ticket=path;}
     catch(e){toast("La foto no se pudo guardar; la compra sí.");}
   }
@@ -790,7 +743,8 @@ async function saveFinish(){
     const p=it.pid&&prodById(it.pid);
     if(p&&!(p.stores&&p.stores[store]))await save("products",{...p,stores:{...p.stores,[store]:true}});
   }
-  const id=await add("purchases",{store,date,total,items,ticket,at:Date.now()});
+  const old=fin.edit&&S.purchases.find(x=>x.id===fin.edit);
+  const id=old?(await save("purchases",{...old,store,date,total,items,ticket}),old.id):await add("purchases",{store,date,total,items,ticket,at:Date.now()});
   if(id){
     const gone=new Set(items.map(i=>i.pid).filter(Boolean)),names=new Set(items.map(i=>norm(i.name)));
     const tripDone=new Set(fin.trip&&S.trip?(S.trip.items||[]).filter(i=>i.done&&i.needId).map(i=>i.needId):[]);
@@ -826,6 +780,7 @@ document.addEventListener("click",async ev=>{
     case "gf":ui.gf=id;renderGastos();break;
     case "per":ui.per=id;renderGastos();break;
     case "manual-expense":openFinish(false);break;
+    case "pur-edit":{const p=S.purchases.find(x=>x.id===id);if(p)openFinish(false,p);break;}
     case "pur-del":if(await ask("¿Borrar esta compra? Se quita del gasto y de los precios.","Borrar"))del("purchases",id);break;
     case "ticket":{const p=S.purchases.find(x=>x.id===id);if(!p?.ticket)break;
       try{const r=await fetch(api(p.ticket),{headers:hdr({Accept:"application/vnd.github.raw+json"})});if(!r.ok)throw 0;
@@ -862,10 +817,10 @@ $("dProdForm").addEventListener("submit",async e=>{e.preventDefault();const name
 $("dBulkForm").addEventListener("submit",async e=>{e.preventDefault();const st=readChecks("bc");if(!STORES.some(s=>st[s.id])){toast("Marca al menos un súper.");return;}
   const names=$("bulkText").value.split(/\n|;/);$("dBulk").close();const n=await addProducts(names,st);toast(n?n+" productos añadidos":"No había productos nuevos");});
 $("dFinForm").addEventListener("submit",e=>{e.preventDefault();saveFinish();});
-for(const fid of ["finFile","finCam"])$(fid).addEventListener("change",e=>{const f=e.target.files[0];if(!f||!fin)return;fin.blob=f;fin.small=null;
-  const can=aiReady();$("finOcrRow").hidden=!can;$("finOcrMsg").hidden=true;
-  $("finFileName").textContent=can?"Foto lista.":"Foto lista. Para que se lean solos los precios, pon una clave de API en Ajustes. Mientras, escribe el total a mano.";
-  if(can)readTicket();});
+for(const fid of ["finFile","finCam"])$(fid).addEventListener("change",e=>{const f=e.target.files[0];if(!f||!fin)return;fin.blob=f;fin.small=null;fin.newPhoto=true;
+  const can=aiReady(),msg=$("finOcrMsg");$("finOcrRow").hidden=!can;$("finFileName").textContent="Foto lista.";
+  if(can){msg.hidden=true;readTicket();}
+  else{msg.hidden=false;msg.textContent="La foto se guardará con la compra, pero no puedo leer los precios: falta la clave de API. Ponla en Ajustes (la rueda de arriba) y después edita esta compra para leer el ticket. Mientras, escribe el total a mano.";}});
 $("finLines").addEventListener("input",()=>{syncLines();showSum();});
 $("dPriceForm").addEventListener("submit",async e=>{e.preventDefault();const price=num($("prPrice").value);if(!(price>0)){toast("Escribe un precio.");return;}
   await add("manual",{pid:$("prProd").value,store:$("prStore").value,price,date:today(),at:Date.now()});$("dPrice").close();});
