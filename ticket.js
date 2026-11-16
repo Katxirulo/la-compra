@@ -1,27 +1,40 @@
 "use strict";
 /* Lectura del ticket: modelos por defecto, llamada al servicio de IA y reparto en líneas.
    Va en fichero aparte para poder ajustarlo sin tocar el resto de la app. */
-const AI_DEF={gemini:"gemini-2.5-flash",anthropic:"claude-haiku-4-5"};
+const AI_DEF={gemini:"gemini-3.8-flash",anthropic:"claude-haiku-4-5"};
+/* Si en Ajustes no se indica modelo, se prueban estos por orden hasta que uno exista. */
+const AI_ALT={gemini:["gemini-3.8-flash","gemini-3.5-flash-lite","gemini-3.6-flash","gemini-flash-latest"],anthropic:["claude-haiku-4-5"]};
 
 const aiCfg=()=>D.settings.v||{};
 const aiReady=()=>!!aiCfg().key;
+async function aiCall(prov,model,key,prompt,data,mime){
+  if(prov==="anthropic"){
+    const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+      body:JSON.stringify({model,max_tokens:8000,messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:mime,data}},{type:"text",text:prompt}]}]})});
+    const j=await r.json().catch(()=>null);
+    return {status:r.status,ok:r.ok,text:r.ok?((j&&j.content)||[]).filter(x=>x.type==="text").map(x=>x.text).join(""):"",detail:(j&&j.error&&j.error.message)||""};
+  }
+  const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{method:"POST",headers:{"content-type":"application/json","x-goog-api-key":key},
+    body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:mime,data}}]}],generationConfig:{responseMimeType:"application/json"}})});
+  const j=await r.json().catch(()=>null);
+  return {status:r.status,ok:r.ok,text:r.ok?((((j&&j.candidates)||[])[0]||{}).content?.parts||[]).map(x=>x.text||"").join(""):"",detail:(j&&j.error&&j.error.message)||""};
+}
 async function aiJson(prompt,blob){
-  const c=aiCfg(),prov=c.provider||"gemini",model=c.model||AI_DEF[prov],data=await blobB64(blob),mime=blob.type||"image/jpeg";
-  let r,text="";
-  try{
-    if(prov==="anthropic"){
-      r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":c.key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-        body:JSON.stringify({model,max_tokens:8000,messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:mime,data}},{type:"text",text:prompt}]}]})});
-      if(r.ok)text=((await r.json()).content||[]).filter(x=>x.type==="text").map(x=>x.text).join("");
-    }else{
-      r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{method:"POST",headers:{"content-type":"application/json","x-goog-api-key":c.key},
-        body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:mime,data}}]}],generationConfig:{responseMimeType:"application/json"}})});
-      if(r.ok)text=(((await r.json()).candidates||[])[0]?.content?.parts||[]).map(x=>x.text||"").join("");
+  const c=aiCfg(),prov=c.provider||"gemini",models=c.model?[c.model]:AI_ALT[prov],data=await blobB64(blob),mime=blob.type||"image/jpeg";
+  let last=null;
+  for(const model of models){
+    for(let n=0;n<2;n++){ // un reintento si el servicio está saturado o falla la red
+      try{last=await aiCall(prov,model,c.key,prompt,data,mime);last.model=model;}
+      catch(e){last={status:0,ok:false,text:"",detail:String((e&&e.message)||e),model};}
+      if(last.ok||(last.status>0&&last.status<500))break;
+      await new Promise(z=>setTimeout(z,2500));
     }
-  }catch(e){throw {code:"net"};}
-  if(!r.ok)throw {code:r.status===401||r.status===403?"auth":r.status===404?"model":r.status===429?"limit":r.status===400?"bad":"net",status:r.status};
-  const a=text.indexOf("{"),b=text.lastIndexOf("}");
-  try{return JSON.parse(text.slice(a,b+1));}catch(e){throw {code:"parse"};}
+    if(last.ok||last.status!==404)break; // 404: ese modelo no existe para esta clave; prueba el siguiente
+  }
+  if(!last.ok){const st=last.status;
+    throw {code:st===401||st===403?"auth":st===404?"model":st===429?"limit":st===400?"bad":st>=500?"busy":"net",status:st,detail:(st?st+" ":"")+last.detail+" ["+last.model+"]"};}
+  const a=last.text.indexOf("{"),b=last.text.lastIndexOf("}");
+  try{return JSON.parse(last.text.slice(a,b+1));}catch(e){throw {code:"parse",detail:last.text.slice(0,120)};}
 }
 
 async function readTicket(){
@@ -52,7 +65,7 @@ async function readTicket(){
     const un=fin.lines.filter(l=>!l.pid).length;
     msg.textContent=lines.length?"Leído: "+lines.length+(lines.length===1?" artículo":" artículos")+". Revisa el total y los precios."+(un?" "+un+(un===1?" no está":" no están")+" en la lista maestra: se "+(un===1?"añadirá":"añadirán")+" al guardar, o elige a qué producto "+(un===1?"corresponde":"corresponden")+".":""):"No he podido sacar las líneas. Escribe el total a mano.";
   }catch(e){
-    const m={auth:"La clave de API no es válida. Revísala en Ajustes.",model:"El modelo indicado en Ajustes no existe. Cámbialo allí.",limit:"Se ha alcanzado el límite de uso de la clave de API. Prueba más tarde.",bad:"El servicio ha rechazado la petición. Revisa la clave y el modelo en Ajustes.",net:"No se pudo contactar con el servicio. Comprueba la conexión.",parse:"No he podido entender la respuesta. Inténtalo otra vez."};
-    msg.textContent=(m[e?.code]||"No se pudo leer el ticket.")+" También puedes escribir el total a mano.";console.warn(e);
+    const m={auth:"La clave de API no es válida. Revísala en Ajustes.",model:"El modelo indicado en Ajustes no existe. Cámbialo allí.",limit:"Se ha alcanzado el límite de uso de la clave de API. Prueba más tarde.",bad:"El servicio ha rechazado la petición. Revisa la clave y el modelo en Ajustes.",net:"No se pudo contactar con el servicio. Comprueba la conexión.",busy:"El servicio de lectura está saturado ahora mismo. Vuelve a pulsar «Leer el ticket» en un momento.",parse:"No he podido entender la respuesta. Inténtalo otra vez."};
+    msg.textContent=(m[e?.code]||"No se pudo leer el ticket.")+" También puedes escribir el total a mano."+(e&&e.detail?" (Detalle: "+String(e.detail).slice(0,220)+")":"");console.warn(e);
   }finally{btn.disabled=false;}
 }
